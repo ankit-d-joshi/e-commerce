@@ -1,0 +1,39 @@
+# Application configuration for the Product Catalog service.
+#
+# Local/dev values are hardcoded here for now (Step 1). In a real deployment these would
+# come from environment variables / a Kubernetes ConfigMap+Secret (see Step 3) rather than
+# living in the jar — but that's the next lesson, not this one. YAGNI for Step 1: get one
+# service running correctly first.
+
+spring:
+  application:
+    name: product-catalog
+
+  datasource:
+    # This assumes a local Postgres reachable at localhost:5432 (see the README for a
+    # throwaway `docker run` command). Step 2 replaces this ad-hoc container with a
+    # proper Docker Compose service.
+    url: jdbc:postgresql://localhost:5432/product_catalog
+    username: catalog
+    password: catalog
+
+  jpa:
+    hibernate:
+      # IMPORTANT: "validate", never "update" or "create". Hibernate reads the schema
+      # Flyway has already built and fails fast at startup if the @Entity mappings don't
+      # match it. Flyway migrations are the single source of truth for schema; Hibernate
+      # is never allowed to mutate the schema itself. This is the industry-standard split
+      # of responsibilities between an ORM and a migration tool.
+      ddl-auto: validate
+    # Log a warning (rather than silently truncate/behave oddly) if a query result set is
+    # opened without an explicit transaction boundary. Cheap safety net during learning.
+    open-in-view: false
+
+  flyway:
+    # Enabled by default once flyway-core is on the classpath; listed explicitly here so
+    # the config is self-documenting rather than relying on an implicit default.
+    enabled: true
+    locations: classpath:db/migration
+
+server:
+  port: 8080
