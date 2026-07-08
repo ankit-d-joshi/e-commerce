@@ -1,8 +1,8 @@
 # Spring Microservices E-Commerce (Learning Build)
 
 A hands-on e-commerce application built to gain **genuine, interview-defensible
-competence** in Spring Boot microservices, containerization, and Kubernetes/cloud —
-starting from a decade of Spring/Java experience but new to the cloud-native stack.
+competence** in Spring Boot microservices, containerization, and Kubernetes/cloud — every
+line, application code included, explained as if for the first time.
 
 See [CLAUDE.md](CLAUDE.md) for the working agreement/teaching contract that governs how
 this project is built, and [PROGRESS.md](PROGRESS.md) for current status.
@@ -47,7 +47,7 @@ step.
 
 ### Phase 1 — One service, all the way through
 - **Step 1** — First Spring service: Product Catalog (list/get products), plain Spring
-  Boot + REST, backed by PostgreSQL. App logic — Claude's to write freely.
+  Boot + REST, backed by PostgreSQL.
 - **Step 2** — Containerize it: a well-commented multi-stage Dockerfile (build stage +
   slim runtime, layered jar) teaching Docker fundamentals. Run the service + a Postgres
   container locally via Docker Compose and confirm it works.
