@@ -29,9 +29,26 @@ import org.springframework.data.domain.PageRequest;
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+// @Import pulls a specific @Configuration class into this test's Spring
+// context — here, TestcontainersConfiguration, whose @Bean method starts the real
+// Postgres container. @DataJpaTest's own autoconfiguration only wires up the JPA/
+// repository slice; it has no idea a Postgres container needs to exist unless something
+// tells it to include that bean definition. @Import is the mechanism for "also load this
+// specific extra configuration," as opposed to @ComponentScan, which discovers
+// everything under a package automatically — @Import is explicit and targeted, which
+// matters here because TestcontainersConfiguration lives outside this test's own
+// package and isn't meant to be picked up by scanning.
 @Import(TestcontainersConfiguration.class)
 class ProductRepositoryTest {
 
+	// @Autowired means: "ask the Spring test context for a bean of this
+	// type and assign it here." @DataJpaTest's autoconfiguration is what actually creates
+	// the real ProductRepository bean (the same dynamic-proxy mechanism described in
+	// ProductRepository.java) — this field just asks Spring to hand that already-built
+	// bean over, rather than this test constructing one itself. That's only possible
+	// because @DataJpaTest starts a real (if partial) Spring context; contrast with
+	// ProductServiceTest, which has no Spring context and so builds everything with `new`
+	// by hand.
 	@Autowired
 	private ProductRepository productRepository;
 
