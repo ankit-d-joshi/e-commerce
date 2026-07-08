@@ -42,7 +42,7 @@ does not retain memory between sessions.
   first commit; `CLAUDE.md`'s "What this project is" and "teaching contract" sections
   were rewritten to match. See `CLAUDE.md` for the current wording.
 
-## Status: Step 1 — First Spring service (Product Catalog)
+## Status: Step 1 — First Spring service (Product Catalog) — COMPLETE, committed
 
 **Step 0 complete (2026-07-07).** Toolchain installed and verified:
 
@@ -90,8 +90,12 @@ migration is edited via a new version rather than in place, what
 `flyway_schema_history` checksums protect against, why Testcontainers-over-H2 avoids
 the works-locally-not-in-prod dialect trap, and what `@ServiceConnection` auto-wires.
 
-**Next action:** commit Step 1, then wait for explicit confirmation before starting
-Step 2 (containerize with Docker).
+Committed 2026-07-08 (19 commits, `01794ab`..`f9e6851` — scaffold + the teaching-contract
+rewrite + full comment retrofit, split granularly by the user rather than the two
+originally-proposed commits). Step 1 is fully done.
+
+**Next action:** user confirmed starting **Step 2 — containerize with Docker** in a new
+session. Nothing else pending; resume directly with Step 2's announce/teach step.
 
 ## Roadmap checklist
 
