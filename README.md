@@ -22,9 +22,10 @@ this project is built, and [PROGRESS.md](PROGRESS.md) for current status.
 | Component      | Choice                          |
 |-----------------|---------------------------------|
 | Language        | Java 25 (LTS)                   |
-| Framework       | Spring Boot 3.x                 |
+| Framework       | Spring Boot 4.1.0 (updated from the original 3.x pin — 3.5 reached open-source EOL 2026-06-30) |
 | Build tool      | Maven                           |
 | Database        | PostgreSQL (one per service)    |
+| Migrations      | Flyway                          |
 | Containers      | Docker / Docker Compose         |
 | Orchestration   | Kubernetes via `kind` (local)   |
 | Packaging       | Helm (introduced in Step 10)    |
