@@ -30,9 +30,22 @@ import org.springframework.test.util.ReflectionTestUtils;
  * behavior end-to-end; this tier's job is to fail fast and precisely when just the
  * service's logic breaks.
  */
+// @ExtendWith(MockitoExtension.class) is JUnit 5's plugin mechanism: it registers
+// Mockito's JUnit extension so that @Mock-annotated fields below get initialized
+// automatically before each test method runs. Without this, `productRepository` would
+// just be null — the annotation alone does nothing; something has to process it.
 @ExtendWith(MockitoExtension.class)
 class ProductServiceTest {
 
+	// @Mock creates a plain Mockito test double — a fake ProductRepository whose methods
+	// do nothing and return null/empty by default until you tell it what to return with
+	// when(...).thenReturn(...). Crucially, no Spring context exists anywhere in this
+	// test: Mockito and Spring are entirely separate libraries here. Contrast this with
+	// @MockitoBean in ProductControllerTest, which also creates a Mockito mock but then
+	// additionally registers it *into a running Spring ApplicationContext* in place of
+	// the real bean — that only makes sense in a test that boots Spring at all, which
+	// this one deliberately doesn't (see the class comment above: no Spring context, by
+	// design, for speed and isolation).
 	@Mock
 	private ProductRepository productRepository;
 
@@ -40,6 +53,10 @@ class ProductServiceTest {
 
 	@Test
 	void findByIdReturnsMappedResponseWhenProductExists() {
+		// Constructed with `new`, by hand, in plain Java — no Spring involved. Since
+		// ProductService takes its one dependency via constructor injection (see
+		// ProductService.java), any caller can supply that dependency directly; a test
+		// doesn't need a DI container just to build the object under test.
 		productService = new ProductService(productRepository);
 		Product product = newProduct(1L, "SKU-1", "Widget", new BigDecimal("9.99"));
 		when(productRepository.findById(1L)).thenReturn(Optional.of(product));
