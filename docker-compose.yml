@@ -1,0 +1,120 @@
+# Docker Compose file for local development: runs the product-catalog service and its
+# Postgres database together, on one command (`docker compose up --build`), replacing the
+# README's earlier throwaway `docker run` instructions for Postgres.
+#
+# What Compose actually is: a tool that reads this YAML file and turns each entry under
+# `services:` into a `docker run`-equivalent container, PLUS automatically creates a shared
+# private network those containers can reach each other over by service name (see the
+# `postgres` hostname used below) — something plain `docker run` doesn't give you unless you
+# manually create and attach a network yourself. It's a single-host orchestration tool: the
+# direct, much simpler ancestor of what Kubernetes (Step 3) does across a whole cluster —
+# `depends_on`/healthchecks here map conceptually to Kubernetes readiness probes and Service
+# DNS there, which I'll call out explicitly when we get to Step 3.
+
+services:
+
+  # ---------------------------------------------------------------------------------------
+  # Postgres — the database, unchanged in kind from the README's throwaway container, but
+  # now managed declaratively by Compose instead of a one-off imperative `docker run`.
+  # ---------------------------------------------------------------------------------------
+  postgres:
+    # Same pin used everywhere else in this project (Testcontainers, the old README
+    # command) — one Postgres version across dev, test, and (later) prod-shaped
+    # environments, never a floating `:latest`.
+    image: postgres:18.4
+
+    # The official postgres image's entrypoint script reads these on first container
+    # startup and creates a matching database + role. Must line up exactly with
+    # application.yml's fallback datasource values (catalog/catalog/product_catalog),
+    # since product-catalog's env below reuses these same values via variable
+    # substitution rather than repeating the literals a second time.
+    environment:
+      POSTGRES_DB: product_catalog
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: catalog
+
+    # A NAMED volume: Docker manages the storage (unlike a throwaway container, whose
+    # writable layer disappears with `docker rm`). "pgdata" is declared under the
+    # top-level `volumes:` key below and mounted at /var/lib/postgresql/18/docker —
+    # Postgres's actual data directory inside this image — so the database survives
+    # `docker compose down` (which stops and removes containers) and is only wiped by
+    # the explicit `docker compose down -v` (which also removes volumes). This is what
+    # makes local dev data persist across restarts instead of Flyway re-seeding from
+    # scratch every single time you restart the stack.
+    volumes:
+      - pgdata:/var/lib/postgresql/18/docker
+
+    # A healthcheck teaches Compose how to tell "container is running" (the process
+    # started) apart from "container is actually ready to accept connections" — those
+    # are NOT the same moment for Postgres, which does startup initialization work
+    # after its process launches. `pg_isready` is Postgres's own bundled CLI tool for
+    # exactly this check; running it via `pg_isready -U catalog -d product_catalog`
+    # confirms the specific user/database this project needs are actually queryable, not
+    # just that some Postgres process is listening on the port.
+    #   - interval: 2s   -> how often to run the check
+    #   - timeout: 3s    -> how long a single check attempt may take before it's a failure
+    #   - retries: 10    -> how many consecutive failures before Compose calls this
+    #                       container "unhealthy" (2s * 10 = ~20s grace window on a fresh
+    #                       volume, generous for first-ever startup/initdb)
+    healthcheck:
+      # "CMD-SHELL" (vs. "CMD") picks how the rest of this list is run inside the
+      # container. CMD-SHELL hands the single following string to `/bin/sh -c "..."`,
+      # so it's parsed by a real shell — meaning pipes, &&, and $VAR expansion would
+      # all work here if needed. Plain CMD instead exec()'s each remaining list item
+      # directly as its own argument, with no shell involved at all. This specific
+      # command (`pg_isready -U catalog -d product_catalog`) uses none of those shell
+      # features, so CMD would work identically and skip spawning a shell process —
+      # CMD-SHELL is kept here as the common default you'll see in most Compose/Docker
+      # healthcheck examples in the wild, not because this command needs it.
+      test: ["CMD-SHELL", "pg_isready -U catalog -d product_catalog"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------------------
+  # product-catalog — the Spring Boot service itself, built from the Dockerfile in Step 2.
+  # ---------------------------------------------------------------------------------------
+  product-catalog:
+    # Rather than a pre-built `image:`, `build:` tells Compose to run `docker build` using
+    # the Dockerfile in the given directory (context = build context, i.e. what gets sent
+    # to the daemon, filtered by .dockerignore — see that file's comments). Compose builds
+    # this automatically on `docker compose up --build`, or reuses a previously-built image
+    # if you omit `--build` and one already exists locally.
+    build:
+      context: ./product-catalog
+
+    # `depends_on` alone (a bare list of service names) only guarantees Postgres's
+    # container has STARTED before this one starts — not that Postgres is actually ready to
+    # accept connections yet, which is a real race: this app would otherwise sometimes try
+    # to connect within that ~20s Postgres init window above and fail. The long-form
+    # `condition: service_healthy` upgrades that guarantee: Compose won't start
+    # product-catalog until the `postgres` service's healthcheck above has actually passed.
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    # Environment variables consumed by application.yml's ${VAR:default} placeholders (see
+    # that file's comments). Note the hostname used here: "postgres", not "localhost" —
+    # Compose's automatically-created network resolves each service's name to that
+    # service's container via internal DNS, so from INSIDE the product-catalog container,
+    # "postgres" reaches the postgres container. "localhost" inside product-catalog would
+    # instead mean the product-catalog container itself, which has no database running in
+    # it — a genuinely common first-timer mistake this setup avoids by construction.
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/product_catalog
+      SPRING_DATASOURCE_USERNAME: catalog
+      SPRING_DATASOURCE_PASSWORD: catalog
+
+    # Publishes container port 8080 (see the Dockerfile's EXPOSE 8080 and
+    # application.yml's server.port: 8080) to the same port on the host machine, so
+    # `curl localhost:8080/api/products` from your own terminal reaches the containerized
+    # app. Format is "host:container" — they happen to match here, but don't have to.
+    ports:
+      - "8080:8080"
+
+# Top-level volumes registry: named volumes must be declared here before a service can
+# reference them under its own `volumes:` list (as postgres does above). Compose creates
+# this as an actual Docker-managed volume the first time the stack runs; `docker volume ls`
+# will show it afterward.
+volumes:
+  pgdata:
