@@ -39,10 +39,36 @@ step.
 
 ## Local development
 
-Until Step 2 introduces Docker Compose, `product-catalog` expects a Postgres instance
-reachable at `localhost:5432` with the credentials/database it's configured for
-(`product-catalog/src/main/resources/application.yml`). Start one as a throwaway
-container:
+### Option A — whole stack via Docker Compose (recommended)
+
+`docker-compose.yml` (repo root) runs `product-catalog` and its Postgres database
+together, on one command:
+
+```bash
+docker compose up --build
+```
+
+- `--build` — (re)builds the `product-catalog` image from `product-catalog/Dockerfile`
+  before starting; omit it on later runs if you haven't changed the source and want to
+  reuse the already-built image.
+- Postgres data persists in a named Docker volume (`pgdata`) across restarts. To stop the
+  stack: `docker compose down`. To also wipe the database and start completely fresh (fine
+  locally, since Flyway rebuilds schema + seed data from scratch every time):
+  `docker compose down -v`.
+- Once healthy, the service is reachable at `http://localhost:8080` exactly as if run
+  locally — e.g. `curl localhost:8080/api/products`.
+
+See `product-catalog/Dockerfile` and `docker-compose.yml` for the fully-commented
+walkthrough of how the image is built and the stack is wired together (multi-stage builds,
+layered jars, Compose networking/healthchecks — Step 2).
+
+### Option B — run the service on the host, against a throwaway Postgres container
+
+Useful for fast local iteration (IDE run/debug, hot reload) without rebuilding a Docker
+image on every change. `product-catalog` expects a Postgres instance reachable at
+`localhost:5432` with the credentials/database it's configured for
+(`product-catalog/src/main/resources/application.yml`'s fallback values). Start one as a
+throwaway container:
 
 ```bash
 docker run --name catalog-postgres \
@@ -57,17 +83,17 @@ docker run --name catalog-postgres \
   name instead of hunting for a generated container ID.
 - `-e POSTGRES_DB/_USER/_PASSWORD` — the official Postgres image's entrypoint script
   reads these env vars on first startup and creates the database + role to match, so
-  they must line up exactly with `application.yml`'s `spring.datasource` block.
+  they must line up exactly with `application.yml`'s `spring.datasource` fallback values.
 - `-p 5432:5432` — publishes the container's Postgres port to the same port on the
-  host, since `application.yml` points at `localhost:5432`.
+  host, since `application.yml` falls back to `localhost:5432`.
 - `-d` — detached; runs in the background instead of occupying the terminal.
 - `postgres:18.4` — pinned to match the version Testcontainers uses in the test suite
   (see `PROGRESS.md`), so local/dev and test behavior stay consistent.
 
 This container is throwaway/unnamed-volume: stopping and removing it
 (`docker rm -f catalog-postgres`) discards all data, which is fine for local dev since
-Flyway rebuilds the schema and seed data from scratch on every startup. Step 2 replaces
-this ad-hoc command with a proper Docker Compose service.
+Flyway rebuilds the schema and seed data from scratch on every startup. Then run the
+service itself directly from `product-catalog/`: `./mvnw spring-boot:run`.
 
 ## Roadmap
 
