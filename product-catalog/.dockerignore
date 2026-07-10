@@ -1,0 +1,35 @@
+# The "build context" is everything in this directory that `docker build`
+# reads and sends to the Docker daemon before a single instruction runs (it's
+# why `docker build` always prints "Sending build context to Docker daemon
+# ...MB" as its first line). By default that's EVERY file under this
+# directory, walked recursively — .dockerignore trims that set, the same way
+# .gitignore trims what `git add` considers, and using the exact same
+# glob-pattern syntax.
+#
+# Two independent reasons this matters here, not just one:
+#   1. Speed/size: the larger the context, the longer `docker build` takes
+#      just to transfer it, before any instruction even executes.
+#   2. Correctness: target/ contains this project's OWN previous build
+#      output (compiled .class files, an already-built jar, a JaCoCo
+#      report, from running `mvn` on the host). None of that should ever be
+#      copied into the image — the Dockerfile's whole job is to rebuild all
+#      of that from source *inside* the controlled build stage, so the
+#      image's contents are reproducible from source, not accidentally
+#      contaminated by whatever stale artifacts happen to be sitting on the
+#      developer's machine at build time.
+target/
+
+# Version control metadata. Irrelevant to the running application and
+# potentially large (full commit history) — never has a reason to be inside
+# a build context or shipped image.
+.git/
+.gitignore
+.gitattributes
+
+# Editor/IDE-specific files (matches the entries already ignored by the
+# repo-root .gitignore) — machine-local, never relevant to a container build.
+.vscode/
+
+# This file itself doesn't need to be re-copied into the build context.
+Dockerfile
+.dockerignore
