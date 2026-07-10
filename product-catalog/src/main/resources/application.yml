@@ -1,21 +1,31 @@
 # Application configuration for the Product Catalog service.
 #
-# Local/dev values are hardcoded here for now (Step 1). In a real deployment these would
-# come from environment variables / a Kubernetes ConfigMap+Secret (see Step 3) rather than
-# living in the jar — but that's the next lesson, not this one. YAGNI for Step 1: get one
-# service running correctly first.
+# The datasource block below is externalized via environment variables (Step 2), each with
+# a `localhost` fallback so the exact same jar works two ways with zero code/config changes:
+#   - Run bare (`./mvnw spring-boot:run`, or an IDE run configuration) with no env vars set
+#     -> falls back to localhost:5432, matching a manually-started Postgres container.
+#   - Run inside Docker Compose (see docker-compose.yml) -> Compose injects
+#     SPRING_DATASOURCE_URL etc. pointing at the `postgres` service-name instead of
+#     localhost, since "localhost" inside the product-catalog container would mean the
+#     container itself, not the separate Postgres container next to it.
+# A real deployment (Step 3+) would source these same env vars from a Kubernetes
+# ConfigMap+Secret rather than Compose — the placeholder mechanism here is exactly what
+# makes that swap possible later without touching this file again.
 
 spring:
   application:
     name: product-catalog
 
   datasource:
-    # This assumes a local Postgres reachable at localhost:5432 (see the README for a
-    # throwaway `docker run` command). Step 2 replaces this ad-hoc container with a
-    # proper Docker Compose service.
-    url: jdbc:postgresql://localhost:5432/product_catalog
-    username: catalog
-    password: catalog
+    # ${VAR:default} is Spring's property placeholder syntax: at startup, Spring checks
+    # the environment (and other property sources) for VAR; if it's not set, it falls back
+    # to the value after the colon. This is "relaxed binding" made explicit and
+    # self-documenting, rather than relying silently on Spring Boot's implicit
+    # SPRING_DATASOURCE_URL -> spring.datasource.url env-var mapping with no default shown
+    # here at all.
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/product_catalog}
+    username: ${SPRING_DATASOURCE_USERNAME:catalog}
+    password: ${SPRING_DATASOURCE_PASSWORD:catalog}
 
   jpa:
     hibernate:
