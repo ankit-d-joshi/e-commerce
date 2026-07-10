@@ -101,6 +101,14 @@
 	</dependencies>
 
 	<build>
+		<!-- Without this, Maven names the built jar
+		     target/product-catalog-${project.version}.jar (currently
+		     product-catalog-0.0.1-SNAPSHOT.jar) — meaning the Dockerfile would need
+		     to hardcode that exact version string and be edited every time
+		     <version> above changes. Pinning a fixed, version-independent name
+		     decouples the Dockerfile (COPY/RUN paths, ENTRYPOINT) from this
+		     project's version number entirely. -->
+		<finalName>app</finalName>
 		<plugins>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
