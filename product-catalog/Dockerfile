@@ -97,6 +97,14 @@ COPY mvnw pom.xml ./
 # anything. Doing this as its own RUN — using only pom.xml, before any source
 # exists — is what makes it its own cacheable layer per the note above.
 #
+# Flag syntax note: `--mount` takes ONE value, and that value is itself a
+# comma-separated list of its own `key=value` sub-options — so the first `=`
+# binds the flag to its value, and each subsequent `key=value` (`type=cache`,
+# `target=/root/.m2`, `sharing=locked`) is a sub-option WITHIN that value, not
+# a separate flag. `type` picks which kind of mount BuildKit creates (`cache`,
+# `bind`, `secret`, `ssh`, ...); the other sub-options are specific to
+# whichever `type` was chosen — `cache` accepts `target` and `sharing`.
+#
 # `--mount=type=cache,target=/root/.m2,sharing=locked` is a SEPARATE caching
 # mechanism from the Docker layer caching discussed above, solving a
 # different problem. A normal RUN's filesystem changes get baked into that
