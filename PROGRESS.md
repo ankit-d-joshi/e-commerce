@@ -41,8 +41,38 @@ does not retain memory between sessions.
   files (main + test) were retrofitted with inline comments closing those gaps before
   first commit; `CLAUDE.md`'s "What this project is" and "teaching contract" sections
   were rewritten to match. See `CLAUDE.md` for the current wording.
+- 2026-07-10 (Step 2) — **`eclipse-temurin:25-jdk-noble` / `25-jre-noble`** pinned as the
+  Dockerfile's build/runtime base images (Debian-based; no Alpine variant exists for Java
+  25). Runtime stage runs as a dedicated non-root user — cheap baseline hardening, not the
+  deep hardening (distroless, read-only FS, scanning, RBAC) explicitly scoped to Step 12.
+- 2026-07-10 (Step 2) — **BuildKit cache mount** (`--mount=type=cache,target=/root/.m2`)
+  added to both Maven `RUN` instructions after the first build attempt failed 54 minutes
+  in on a Maven Central read timeout. Root cause: a normal Docker layer only commits on
+  success, so a failed `RUN` discards every dependency already downloaded and a retry
+  starts from zero; a cache mount persists outside the layer system and survives a failed
+  `RUN`, so retries resume instead of re-downloading everything. Requires the
+  `# syntax=docker/dockerfile:1` parser directive as the Dockerfile's first line.
+- 2026-07-10 (Step 2) — **`<finalName>app</finalName>`** added to `product-catalog/pom.xml`
+  so the built jar is always `target/app.jar` regardless of `<version>`, decoupling the
+  Dockerfile from the project's version string.
+- 2026-07-10 (Step 2) — Toolchain rough edge: an initial Dockerfile draft used
+  `ENTRYPOINT ["java", "org.springframework.boot.loader.launch.JarLauncher"]` (the
+  pre-3.2-era layered-jar pattern) and failed with `ClassNotFoundException`. Verified by
+  inspecting the actual extracted output that Spring Boot 4.1.0's `-Djarmode=tools
+  extract --layers` now rewrites the jar into a **thin jar** whose manifest sets
+  `Main-Class` to the app's own main class and `Class-Path` to the `dependencies/`
+  layer's `lib/*.jar` files directly — no loader class involved, and the
+  `spring-boot-loader/` extracted directory is empty for this packaging model (kept only
+  for forward-compat with Spring Boot's documented 4-layer contract). Fixed to
+  `ENTRYPOINT ["java", "-jar", "app.jar"]`. Worth rechecking on future Spring Boot
+  versions in case the loader-class layout returns.
+- 2026-07-10 (Step 2) — **Datasource config externalized** via
+  `${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/product_catalog}`-style
+  placeholders in `application.yml`, so the same jar works unmodified both bare
+  (`./mvnw spring-boot:run`, localhost fallback) and under Docker Compose (env vars
+  injected, pointing at the `postgres` service name over Compose's internal DNS).
 
-## Status: Step 1 — First Spring service (Product Catalog) — COMPLETE, committed
+## Status: Step 2 — Containerize with Docker — COMPLETE, committed
 
 **Step 0 complete (2026-07-07).** Toolchain installed and verified:
 
@@ -68,7 +98,7 @@ Git repo initialized at repo root, default branch renamed `master` → `main`, m
 `.gitignore` added (Editor only — no Java-specific entries yet since no Maven
 project exists until Step 1).
 
-**Step 1 build complete (2026-07-07), pending quiz + commit.** Built `product-catalog/`:
+**Step 1 build complete (2026-07-07), quiz passed, committed.** Built `product-catalog/`:
 a standalone Spring Boot 4.1.0 service with `GET /api/products` (paginated, via
 `PagedModel`) and `GET /api/products/{id}`, backed by PostgreSQL. Domain: `Product`
 entity + `ProductRepository`; schema owned entirely by two Flyway migrations
@@ -94,14 +124,53 @@ Committed 2026-07-08 (19 commits, `01794ab`..`f9e6851` — scaffold + the teachi
 rewrite + full comment retrofit, split granularly by the user rather than the two
 originally-proposed commits). Step 1 is fully done.
 
-**Next action:** user confirmed starting **Step 2 — containerize with Docker** in a new
-session. Nothing else pending; resume directly with Step 2's announce/teach step.
+**Step 2 build complete (2026-07-10), quiz passed, committed.** Built
+`product-catalog/Dockerfile`: a heavily-commented multi-stage build (`eclipse-temurin:
+25-jdk-noble` build stage → `25-jre-noble` runtime stage, non-root user, layered-jar
+extraction via `-Djarmode=tools extract --layers`, BuildKit cache-mounted Maven builds).
+Added `product-catalog/.dockerignore` and root-level `docker-compose.yml` (Postgres +
+product-catalog services, named `pgdata` volume, `pg_isready` healthcheck gating
+`depends_on: condition: service_healthy`, Compose-internal DNS via service name).
+`application.yml`'s datasource block externalized to `${SPRING_DATASOURCE_*:localhost
+fallback}` placeholders so the same jar runs bare or under Compose unmodified.
+`product-catalog/pom.xml` pinned `<finalName>app</finalName>` to decouple the Dockerfile
+from the project version.
+
+Two real bugs were hit and fixed during build verification, both logged above in the
+decisions log: a 54-minute Maven Central timeout (fixed via BuildKit `--mount=type=cache`
+for `/root/.m2`) and a `ClassNotFoundException` from an incorrect `JarLauncher`
+`ENTRYPOINT` copied from pre-3.2-era tutorials (fixed to `java -jar app.jar` after
+verifying Spring Boot 4.1.0's actual thin-jar-plus-`Class-Path` extraction output).
+
+End-to-end verified: `docker compose up --build` builds cleanly, Postgres reports
+healthy, Flyway migrates on container startup, `GET /api/products` and
+`GET /api/products/{id}` both return correct data (and a correct 404 `ProblemDetail` for
+a missing id) against the running container, `docker compose down -v` cleanly resets
+state, and `mvn clean verify` on the host still passes all 12 tests unaffected by the
+containerization changes. Final runtime image: 531MB (Debian-based JRE, not
+slim/distroless — that trade-off is deliberate per Step 2's scope; deeper hardening is
+Step 12).
+
+Quiz passed (2026-07-10) — user correctly explained Compose service-name DNS vs
+`localhost` inside a container, and the `Main-Class`/`Class-Path` manifest fields that let
+`java -jar app.jar` resolve the app and its dependencies with no loader class. Two answers
+needed a follow-up clarification (both confirmed understood after): why a *failed* `RUN`
+normally discards all progress but a BuildKit cache mount survives that failure boundary;
+and what specifically in Postgres's own entrypoint script (a two-phase startup — a
+temporary `initdb`/init-script instance that shuts down, then the real long-lived server)
+makes "container started" different from "ready for connections."
+
+Committed 2026-07-10 (7 commits, `0112953`..`223cca6`). Step 2 is fully done.
+
+**Next action:** ready to start **Step 3 — onto Kubernetes** (hand-written manifests:
+Deployment, Service, ConfigMap, Secret, readiness/liveness probes) on explicit user
+confirmation. Nothing else pending.
 
 ## Roadmap checklist
 
 - [x] Step 0 — Environment & "see it work first"
 - [x] Step 1 — First Spring service (Product Catalog)
-- [ ] Step 2 — Containerize it (Dockerfile + Compose)
+- [x] Step 2 — Containerize it (Dockerfile + Compose)
 - [ ] Step 3 — Onto Kubernetes (hand-written manifests)
 - [ ] Step 4 — Make it observable (Actuator, Prometheus, Grafana)
 - [ ] Step 5 — Second service + database-per-service (Order)
