@@ -47,3 +47,49 @@ spring:
 
 server:
   port: 8080
+
+# Actuator configuration (Step 3). We expose the bare minimum needed for Kubernetes
+# liveness/readiness probes and nothing else — metrics/Prometheus scraping is deferred to
+# Step 4, so the full breadth of what Actuator *can* do stays out of scope until then.
+management:
+  endpoints:
+    web:
+      exposure:
+        # Spring Boot's own default already restricts exposed endpoints to just "health" —
+        # writing it explicitly documents that boundary in this file rather than relying on
+        # an implicit default the reader can't see, same pattern as spring.flyway.enabled
+        # above.
+        include: health
+  endpoint:
+    health:
+      probes:
+        # Publishes /actuator/health/liveness and /actuator/health/readiness as separate
+        # sub-endpoints (instead of one combined /actuator/health). Spring Boot
+        # auto-detects a Kubernetes environment and enables this itself, but pinning it
+        # explicitly means the same endpoints exist when running bare/locally too, so
+        # behavior doesn't silently differ between "on my laptop" and "in the cluster".
+        enabled: true
+      group:
+        # LIVENESS answers "is this JVM/process itself broken and should Kubernetes kill
+        # and restart the pod?" We include ONLY Spring's own internal livenessState signal
+        # (has the application context finished starting without entering a broken state)
+        # — deliberately NOT the database. A Postgres outage doesn't mean this JVM is
+        # broken; restarting the pod wouldn't fix the database and would just add restart
+        # churn on top of an already-degraded dependency.
+        liveness:
+          include: livenessState
+        # READINESS answers "can THIS pod usefully serve traffic right now?" We include
+        # both readinessState (Spring's own internal signal, separate from livenessState —
+        # this one flips to "refusing traffic" not just on startup failure, but also during
+        # graceful shutdown: when the app receives SIGTERM, Spring flips it to REFUSING_
+        # TRAFFIC FIRST, before the context actually closes, so Kubernetes stops sending new
+        # requests while in-flight ones finish — no dropped connections) and "db" (Actuator's
+        # built-in DataSource health indicator, auto-configured because
+        # spring-boot-starter-data-jpa is on the classpath) — if
+        # the database is unreachable, this pod genuinely can't serve /api/products
+        # correctly, so Kubernetes should stop routing traffic to it (drop it from the
+        # Service's endpoints) WITHOUT killing the pod. The instant the DB recovers, the
+        # next readiness check flips back to UP and traffic resumes automatically, with no
+        # restart involved.
+        readiness:
+          include: readinessState,db
