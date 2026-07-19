@@ -1,0 +1,14 @@
+# ConfigMap: same key/value shape as the Secret above, but for NON-sensitive configuration
+# — plain-text at rest, no special handling by the API server. Convention (not a hard
+# rule Kubernetes enforces) is: secrets go in Secrets, everything else goes in ConfigMaps,
+# so a future reader can tell what's sensitive just from which object type it lives in.
+#
+# This holds only the database NAME Postgres should create on first startup — matches
+# docker-compose.yml's POSTGRES_DB: product_catalog.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-config
+  namespace: ecommerce
+data:
+  POSTGRES_DB: product_catalog
