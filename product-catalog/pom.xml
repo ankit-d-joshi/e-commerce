@@ -21,6 +21,21 @@
 		<jacoco.version>0.8.14</jacoco.version>
 	</properties>
 	<dependencies>
+		<!-- Actuator: adds production-monitoring HTTP endpoints (most importantly
+		     /actuator/health) that introspect the running app, without any controller
+		     code of our own. By default it exposes ONLY the "health" endpoint over
+		     HTTP — everything else (metrics, env, beans, ...) is opt-in via
+		     management.endpoints.web.exposure.include (see application.yml), which we
+		     deliberately leave unset here so metrics/Prometheus wiring stays entirely
+		     out of scope until Step 4 (YAGNI). We're pulling this in now, in Step 3,
+		     specifically because it ships two purpose-built health "groups" —
+		     liveness and readiness — that map 1:1 onto Kubernetes' own two-probe
+		     model; see application.yml's management.endpoint.health.group block for
+		     what each one actually checks. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-data-jpa</artifactId>
