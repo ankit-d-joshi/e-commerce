@@ -1,0 +1,25 @@
+# A Namespace is a virtual partition inside a single Kubernetes cluster. Every other
+# object we create in this directory (Deployments, Services, ConfigMaps, Secrets, PVCs...)
+# declares `namespace: ecommerce` and lives inside this partition, instead of the
+# cluster's built-in "default" namespace that kubectl silently targets if you never say
+# otherwise.
+#
+# Why bother with our own namespace instead of just using "default":
+#   - Isolation: names only have to be unique WITHIN a namespace, not across the whole
+#     cluster. A future second service (Step 5's Order service) can reuse a resource name
+#     like "app-config" in its own namespace without colliding with this one.
+#   - Clean teardown: `kubectl delete namespace ecommerce` deletes every object inside it
+#     in one shot — no need to remember and delete each resource individually.
+#   - Realism: real clusters are usually shared across multiple teams/apps, each given
+#     their own namespace, rather than everyone piling into "default". Practicing that
+#     habit now, even on a single-service local cluster, is the point.
+#
+# apiVersion/kind is the pattern every Kubernetes manifest follows: apiVersion says WHICH
+# version of the Kubernetes API this object's schema belongs to (Namespace is a "core"
+# API object, so its group-less apiVersion is just "v1" — no "group/version" prefix like
+# apps/v1 below), and kind says WHICH type of object this is. Together they tell the API
+# server which schema to validate this YAML against.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ecommerce
