@@ -1,0 +1,167 @@
+# A Deployment declares "I want N Pods matching this template running at all times" and
+# continuously reconciles reality toward that — if a Pod dies, it's replaced; if the
+# template changes, Pods are rolled over according to `strategy`. Under the hood a
+# Deployment creates and owns a ReplicaSet (whose only job is keeping exactly N Pods
+# matching the template alive); the Deployment layer on top adds rollout history and
+# update strategy. `kubectl get replicasets -n ecommerce` will show one appear
+# automatically once this is applied — we never create it directly.
+#
+# apiVersion "apps/v1": unlike the "core" API group (Namespace/Secret/ConfigMap/PVC above,
+# which have no group prefix), Deployment belongs to the "apps" API group, version v1 —
+# apiVersion is always "<group>/<version>" for any non-core object.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: ecommerce
+spec:
+  # Exactly one instance. Running >1 replica of a single-instance Postgres pointed at the
+  # SAME PVC would mean two independent postgres processes both believing they own that
+  # data directory — active-active replication is a real (and much more involved) feature
+  # Postgres doesn't give you for free just by scaling a Deployment's replica count.
+  replicas: 1
+
+  # `strategy: Recreate` (default is RollingUpdate) means: on any template change, TERMINATE
+  # the existing Pod completely before creating its replacement — never both at once. This
+  # is required here because the Pod mounts a ReadWriteOnce PVC (see kubernetes-12), which
+  # only ONE Pod may hold read-write at a time. RollingUpdate's whole point is briefly
+  # running old-and-new Pods side by side during the switch — for a stateless app that's
+  # fine, but here the new Pod would fail to even start: it'd be stuck waiting to attach a
+  # volume the still-running old Pod hasn't released yet. Recreate avoids that deadlock at
+  # the cost of a short availability gap during updates — an acceptable trade for a
+  # single-instance dev database.
+  strategy:
+    type: Recreate
+
+  # Selector: how this Deployment identifies "which Pods are mine." Must match
+  # template.metadata.labels below exactly, or Kubernetes rejects this object outright.
+  # This is also the SAME label the Service in kubernetes-14 will select on to find these
+  # Pods — Services and Deployments both use this label-matching mechanism, independently
+  # of each other.
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          # Same pin used in docker-compose.yml and Testcontainers — one Postgres version
+          # everywhere, never a floating `:latest`.
+          image: postgres:18.4
+          ports:
+            - containerPort: 5432
+          env:
+            # valueFrom + configMapKeyRef: pull this env var's VALUE from a specific key in
+            # a ConfigMap, resolved fresh each time the Pod starts (not baked in at apply
+            # time). Contrast with the two Secret-sourced vars just below — same
+            # `valueFrom` mechanism, different source object, which is the whole
+            # ConfigMap-vs-Secret split made concrete.
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  # This `name` is NOT a Pod-local label like `containers[].name` or
+                  # `volumeMounts[].name` elsewhere in this file — it's a cross-object
+                  # reference to another API object's `metadata.name`. It must match the
+                  # ConfigMap named "db-config" (see kubernetes-11-db-config.yaml) in this
+                  # same namespace, or the Pod fails to start with CreateContainerConfigError.
+                  name: db-config
+                  # `key` is the second half of the lookup: which entry inside that
+                  # ConfigMap's `data` map to read. Together, name+key mean "go find
+                  # ConfigMap db-config, then read its data.POSTGRES_DB entry."
+                  key: POSTGRES_DB
+            # secretKeyRef is the Secret equivalent of configMapKeyRef above — same shape,
+            # source object type is the only difference. Note this is the SAME Secret
+            # object the product-catalog Deployment (kubernetes-21) will also read from —
+            # one credential pair, two consumers.
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: password
+          volumeMounts:
+            # Mounts the PVC (declared under spec.volumes below) into this container's
+            # filesystem at Postgres's actual data directory for this image — matching the
+            # path docker-compose.yml already uses (/var/lib/postgresql/18/docker), kept
+            # identical so we know it's a verified-working path rather than a guess.
+            - name: pgdata
+              mountPath: /var/lib/postgresql/18/docker
+          # exec probes run a COMMAND inside the container (as opposed to an HTTP probe,
+          # which makes a network request — used below for product-catalog instead).
+          # `pg_isready` is Postgres's own bundled CLI for exactly this check — identical
+          # tool and identical intent to docker-compose.yml's healthcheck, just expressed
+          # through Kubernetes' probe mechanism instead of Compose's.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "catalog", "-d", "product_catalog"]
+            # How often to run the check, once the Pod is up.
+            periodSeconds: 5
+            # How many consecutive failures before this Pod is marked NOT ready (dropped
+            # from any Service's endpoints, i.e. traffic stops routing to it) without being
+            # restarted.
+            failureThreshold: 3
+          livenessProbe:
+            # Same command as readiness. Distinct from the app's liveness/readiness split
+            # (kubernetes-21) in one respect: Postgres doesn't distinguish "process alive
+            # but not ready to serve" from "process ready" in a meaningfully different way
+            # the way the app does — pg_isready itself IS the accurate signal for both
+            # here, so reusing it for liveness is correct, not a shortcut.
+            exec:
+              command: ["pg_isready", "-U", "catalog", "-d", "product_catalog"]
+            periodSeconds: 10
+            # How many consecutive failures before Kubernetes kills and restarts this
+            # container. Higher than readiness's threshold, and checked less often
+            # (period 10s vs 5s) — a slower, more conservative trigger, since the
+            # consequence (a full restart) is more disruptive than a readiness flip.
+            failureThreshold: 3
+          resources:
+            # requests: what this container is GUARANTEED to get, and what the scheduler
+            # uses to decide which node has room for this Pod. limits: the hard ceiling —
+            # exceeding the memory limit gets the container OOM-killed; exceeding the CPU
+            # limit just throttles it (CPU is "compressible" — the kernel can always hand
+            # out less this scheduling period and let the process catch up next period;
+            # memory isn't, so there's nothing to reclaim without killing something).
+            # Modest values appropriate for a small local dev database, not sized for
+            # production load.
+            #
+            # CPU units are in "millicpu"/"millicores" — the `m` suffix means
+            # one-thousandth of a single core, regardless of whether that core is
+            # physical or hyperthreaded and regardless of clock speed. So 1000m = 1 full
+            # core, 500m = half a core, 100m = a tenth of a core. Under the hood this maps
+            # to a Linux cgroups CFS quota, e.g. 500m = allowed to use 50ms of CPU time out
+            # of every 100ms scheduling period.
+            #
+            # What "cgroups" and "CFS quota" actually are, in plain terms:
+            #   - cgroups (control groups): a Linux kernel feature that groups processes
+            #     together and lets the kernel limit/measure their resource usage as one
+            #     unit. This is the actual mechanism containers are built on — when a
+            #     container starts, the container runtime puts its processes into a
+            #     cgroup, and the numbers below just become settings on that cgroup.
+            #   - CFS (Completely Fair Scheduler): the default Linux scheduler that decides
+            #     which runnable process gets the CPU next, trying to give every process an
+            #     equal time-share.
+            #   - CFS quota: a bandwidth cap bolted onto CFS for cgroups specifically —
+            #     "this cgroup may use at most X ms of CPU per 100ms period." It's a hard
+            #     ceiling enforced even if other CPU cores are sitting completely idle —
+            #     fairness and the quota cap are two separate, independent rules.
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        # Declares the actual volume this Pod can mount, backed by the PVC from
+        # kubernetes-12. The name here ("pgdata") is what volumeMounts.name above refers
+        # to — it's a LOCAL name scoped to this Pod spec, not the PVC's own object name
+        # (claimName), which is why both are spelled out explicitly.
+        - name: pgdata
+          persistentVolumeClaim:
+            claimName: postgres-pvc
