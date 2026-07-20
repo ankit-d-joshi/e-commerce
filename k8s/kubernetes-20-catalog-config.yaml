@@ -1,0 +1,18 @@
+# Non-secret config for the product-catalog app itself — mirrors db-config
+# (kubernetes-11)'s role for Postgres. Just one key: the JDBC URL, which application.yml
+# already expects via its ${SPRING_DATASOURCE_URL:...} placeholder (Step 2) — this
+# ConfigMap is what SUPPLIES that env var here, replacing the value docker-compose.yml
+# used to inject the same way.
+#
+# The hostname inside the URL is "postgres" — the Kubernetes Service name from
+# kubernetes-14, resolved via cluster-internal DNS — NOT "localhost" (would mean the
+# product-catalog Pod's own network namespace, which has no database in it) and not a raw
+# Pod IP (which changes every time the postgres Pod is recreated, so hard-coding one would
+# break the moment that happens).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: catalog-config
+  namespace: ecommerce
+data:
+  SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/product_catalog
