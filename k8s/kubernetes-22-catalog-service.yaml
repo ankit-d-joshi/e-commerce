@@ -1,0 +1,27 @@
+# Same shape and purpose as the postgres Service (kubernetes-14): a stable virtual IP +
+# DNS name load-balancing across whichever Pods match the selector below. This one fronts
+# the TWO product-catalog replicas — a request to this Service's IP gets routed to
+# whichever of those two Pods kube-proxy picks (round-robin by default), which is the
+# concrete mechanism behind "stateless replicas can share load."
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-catalog
+  namespace: ecommerce
+spec:
+  # ClusterIP: internal to the cluster only. We deliberately do NOT expose this externally
+  # via a different Service type (NodePort/LoadBalancer) here — for local verification
+  # we'll reach it with `kubectl port-forward` instead, and real external exposure via
+  # Ingress is explicitly Step 6's job, not this step's.
+  type: ClusterIP
+  selector:
+    # Matches the label set on the product-catalog Deployment's Pod template
+    # (kubernetes-21) — Kubernetes doesn't know this Service and that Deployment are
+    # "related" in any deeper sense; label matching is the entire connection.
+    app: product-catalog
+  ports:
+    # port: what this Service listens on. targetPort: the container port traffic is
+    # forwarded to (matches containerPort: 8080 in kubernetes-21, and server.port: 8080
+    # in application.yml).
+    - port: 8080
+      targetPort: 8080
