@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-catalog
+  namespace: ecommerce
+spec:
+  # Two replicas: unlike Postgres, this app is STATELESS — it holds no data of its own
+  # (all state lives in Postgres), so any replica can serve any request. That's exactly
+  # what makes horizontal scaling trivial here and NOT trivial for the database above: two
+  # Pods both hitting the same Postgres over the network is fine (Postgres handles
+  # concurrent client connections natively); two Pods both trying to own the same on-disk
+  # data directory is not. This 2-vs-1 replica count is meant to make that contrast
+  # visible when we inspect the running cluster.
+  replicas: 2
+
+  # `strategy.type: RollingUpdate` is Kubernetes' default for Deployments — spelled out
+  # here for clarity, deliberately the OPPOSITE choice from Postgres's `Recreate`. This Pod
+  # has no PVC to conflict over, so briefly running old-and-new Pods side by side during an
+  # update is safe, and is in fact what you want: zero-downtime deploys, which
+  # RollingUpdate gives you.
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: product-catalog
+  template:
+    metadata:
+      labels:
+        app: product-catalog
+    spec:
+      containers:
+        - name: product-catalog
+          # This exact tag must already exist on the kind node's container runtime via
+          # `kind load docker-image product-catalog:0.0.1 --name ecommerce-dev` (see this
+          # repo's README "Run on Kubernetes" section) — there is no registry (Docker Hub,
+          # etc.) this image could otherwise be pulled from.
+          image: product-catalog:0.0.1
+          # Kubernetes' default pull policy, `Always`, re-checks a registry for this exact
+          # tag on every single Pod creation — which would fail outright here, since no
+          # registry has this image at all; it only exists locally on this node because
+          # `kind load` put it there directly. IfNotPresent instead says: "if an image
+          # matching this name:tag is already present on the node, use it as-is; only
+          # attempt a registry pull if it's missing." That's the correct policy for this
+          # local, registry-less workflow — it will need to change once Step 11's CI/CD
+          # pushes real images to a real registry.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            # The JDBC URL, non-secret, from the ConfigMap in kubernetes-20.
+            - name: SPRING_DATASOURCE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: catalog-config
+                  key: SPRING_DATASOURCE_URL
+            # Username/password from the SAME Secret object the postgres Deployment
+            # (kubernetes-13) also reads from — one credential pair, two independent
+            # consumers, exactly matching how docker-compose.yml kept both services'
+            # credentials in sync by repeating the same literal values in two places. Here
+            # there's only one place the values are ever written down.
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: username
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: password
+          # --- Probes, in the order Kubernetes actually evaluates them ---
+          #
+          # startupProbe runs FIRST. While it has not yet succeeded even once, BOTH
+          # livenessProbe and readinessProbe below are not evaluated at all — this exists
+          # because a Spring Boot app running Flyway migrations + building the Hibernate
+          # SessionFactory on a cold JVM start can genuinely take longer than a normal
+          # liveness check should tolerate before deciding something's wrong. Without a
+          # startupProbe, a slow-but-healthy first boot could get killed by livenessProbe
+          # before it ever finished starting. Same endpoint as livenessProbe below (both
+          # ultimately ask "has the app context come up cleanly"), just with a much more
+          # generous failure budget aimed specifically at absorbing a slow cold start.
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            periodSeconds: 2
+            # 2s * 30 = up to 60s to finish starting before this probe itself gives up and
+            # the Pod is considered to have failed startup (at which point it's restarted,
+            # same as a livenessProbe failure).
+            failureThreshold: 30
+          # Once startupProbe has succeeded once, livenessProbe takes over: "has this JVM
+          # entered a broken state and should Kubernetes kill and restart the Pod?" Points
+          # at the SAME management.endpoint.health.group.liveness group configured in
+          # application.yml, which deliberately excludes the database (see that file's
+          # comments) — a database outage should not cause this Pod to be restarted.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+          # readinessProbe: "can THIS Pod usefully serve traffic right now?" Points at the
+          # readiness group, which DOES include the database — if Postgres is unreachable,
+          # this Pod is dropped from the product-catalog Service's endpoints (traffic stops
+          # routing to it) WITHOUT being restarted, and rejoins automatically the moment
+          # the next successful check runs.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            # A JVM needs meaningfully more memory headroom than Postgres's native process
+            # for the same "small local workload" scale — these values are picked to give
+            # the JVM room to start (class loading, JIT warmup, connection pool init)
+            # without over-requesting on a local single-node cluster.
+            requests:
+              cpu: 200m
+              memory: 384Mi
+            limits:
+              cpu: 1000m
+              memory: 768Mi
