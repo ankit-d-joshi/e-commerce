@@ -66,6 +66,15 @@ config, observability, CI/CD, security config).** For every piece of code writte
    migrations, not hardcoded/seeded-in-code data, from Step 1 onward. If a shortcut is
    genuinely warranted for learning-scope reasons, stop and justify it in one line before
    taking it, per the YAGNI rule above.
+10. **Spell out defaults explicitly, never leave them implicit.** Any time a field has a
+    platform/tool default the code is relying on (e.g. a Kubernetes Service's
+    `type: ClusterIP`, a Deployment's `strategy.type: RollingUpdate`, an `imagePullPolicy`
+    a runtime would infer on its own), write the field with its default value explicitly
+    rather than omitting it and relying on implicit behavior. Explain in a comment that
+    it's the default and why that default is the right choice here. This applies to all
+    code in the repo (YAML manifests, Helm values, Java/Spring config, etc.), not just
+    Kubernetes — the point is that a reader should never have to know an external default
+    to understand what the running system does.
 
 ## Git commit rules
 
