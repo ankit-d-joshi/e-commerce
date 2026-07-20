@@ -1,0 +1,49 @@
+# A PersistentVolumeClaim (PVC) is a REQUEST for durable storage that outlives any single
+# Pod — the direct equivalent of docker-compose.yml's named "pgdata" volume, which is what
+# let Postgres's data survive `docker compose down` (but not `down -v`). A PVC alone
+# doesn't create storage; it asks for some, and a PersistentVolume (PV) — actual disk —
+# gets bound to satisfy that request.
+#
+# We're NOT hand-writing a PV here. `kind get storageclass` on this cluster shows a
+# default StorageClass named "standard" (provisioner rancher.io/local-path) that
+# auto-provisions a matching PV the moment a PVC references it — this is called DYNAMIC
+# provisioning, versus manually pre-creating PVs (static provisioning) for an admin to
+# hand out. Since we don't set `storageClassName` below, the PVC uses whichever
+# StorageClass is marked (default) — "standard" here.
+#
+# One more thing worth knowing up front: that StorageClass's VOLUMEBINDINGMODE is
+# WaitForFirstConsumer, meaning the actual PV is NOT created the instant this PVC is
+# applied — it stays in a "Pending" state until some Pod that mounts it is actually
+# scheduled onto a node (the postgres Deployment below). That's expected, not a bug: it
+# lets the provisioner place the volume on whichever node the Pod ends up on, which
+# matters more on multi-node clusters than our single-node kind cluster, but is still the
+# behavior we'll observe with `kubectl get pvc`.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: ecommerce
+spec:
+  # accessModes describes how many nodes/Pods may mount this volume at once, and how
+  # (read/write vs read-only). ReadWriteOnce (RWO) means the volume can be mounted
+  # read-write by AT MOST ONE node at a time — the right mode for a single-instance
+  # database's own data directory, and the reason the postgres Deployment below MUST use
+  # `strategy: Recreate` rather than the default RollingUpdate (a rolling update briefly
+  # runs old and new Pods side by side, which would mean two Pods trying to mount the same
+  # RWO volume simultaneously — see that file's comment for the deadlock this would cause).
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # A learning-scope Postgres instance with a handful of seed rows needs nowhere near
+      # this, but 1Gi is a sane small floor that leaves headroom without over-requesting
+      # against kind's local-path storage (which is really just a directory on the host
+      # disk, not a real quota-managed backend).
+      #
+      # Note the "Gi" suffix, not "G": Kubernetes quantities distinguish binary units
+      # (Ki/Mi/Gi, powers of 1024 — "gibibytes") from decimal units (K/M/G, powers of
+      # 1000 — "gigabytes"). So 1Gi = 1024^3 bytes = 1,073,741,824 bytes ≈ 1.074 GB,
+      # not exactly 1,000,000,000 bytes. Binary suffixes are the Kubernetes convention
+      # for memory/storage (mirroring how RAM has always been sized), so that's what
+      # we use here.
+      storage: 1Gi
