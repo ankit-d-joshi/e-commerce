@@ -1,0 +1,39 @@
+# A Service gives a stable virtual IP + DNS name that load-balances to whichever Pods
+# currently match `selector` — Pods are ephemeral (a new one gets a new IP every time it's
+# recreated), so nothing should ever hard-code a Pod IP; you talk to the Service instead.
+# `kube-proxy`, running on every node, is what actually programs the packet-forwarding
+# rules behind this; the Service object itself just declares the intent.
+#
+# This is the direct successor to Compose's automatic service-name DNS: this Service's
+# NAME must be exactly "postgres" because every Pod in this namespace can resolve
+# "postgres" (and the fully-qualified "postgres.ecommerce.svc.cluster.local") to this
+# Service's virtual IP via the cluster's internal DNS (CoreDNS) — meaning
+# application.yml's jdbc:postgresql://postgres:5432/product_catalog placeholder resolves
+# correctly with ZERO changes, exactly the way it already resolved "postgres" under
+# Compose's own internal DNS.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: ecommerce
+spec:
+  # `type: ClusterIP` (the default if omitted, spelled out here for clarity) means this
+  # Service is only reachable from INSIDE the cluster — no external access. Correct for a
+  # database that should never be reachable directly from outside the cluster; contrast
+  # with product-catalog's Service (kubernetes-22), which we'll reach from outside via
+  # `kubectl port-forward` rather than a different Service type, since Ingress/external
+  # exposure is explicitly Step 6's job, not this step's.
+  type: ClusterIP
+  # selector: which Pods this Service routes to — ANY Pod (in this namespace) carrying the
+  # label app: postgres, which is exactly the label the Deployment's Pod template
+  # (kubernetes-13) sets. The Service doesn't know or care that a Deployment created those
+  # Pods; label matching is the only mechanism connecting them.
+  selector:
+    app: postgres
+  ports:
+    # port: the port THIS SERVICE listens on (what other Pods connect to — matches the
+    # 5432 in the JDBC URL). targetPort: the port on the actual Pod/container traffic gets
+    # forwarded to (matches containerPort in kubernetes-13). They happen to be identical
+    # here, but the Service is free to expose a different port than the container uses.
+    - port: 5432
+      targetPort: 5432
