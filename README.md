@@ -95,6 +95,61 @@ This container is throwaway/unnamed-volume: stopping and removing it
 Flyway rebuilds the schema and seed data from scratch on every startup. Then run the
 service itself directly from `product-catalog/`: `./mvnw spring-boot:run`.
 
+### Option C — run on Kubernetes (`kind`)
+
+`k8s/` (repo root) holds hand-written manifests — Deployment, Service, ConfigMap, Secret,
+PVC, probes — for both `product-catalog` and its Postgres database, deployed onto the local
+`kind` cluster set up in Step 0 (`ecommerce-dev`). No Helm yet (Step 10) and no registry:
+the image is built locally and loaded directly onto the cluster's node.
+
+```bash
+# 1. Build the image (same Dockerfile as Option A/B above).
+docker build -t product-catalog:0.0.1 ./product-catalog
+
+# 2. Load it directly onto the kind node's container runtime. There is no registry in
+#    this local setup, so `kind load` is what makes the image available for Kubernetes
+#    to run — see kubernetes-21-catalog-deployment.yaml's imagePullPolicy comment.
+kind load docker-image product-catalog:0.0.1 --name ecommerce-dev
+
+# 3. Apply every manifest. Filenames are numbered so this glob applies them in a safe
+#    order (namespace -> config/secret/storage -> postgres -> product-catalog).
+kubectl apply -f k8s/
+
+# 4. Watch pods come up (Ctrl-C once everything is 1/1 Running).
+kubectl get pods -n ecommerce -w
+```
+
+Kubernetes has no equivalent of Compose's `depends_on: condition: service_healthy` — both
+Deployments start racing the moment they're applied, so it's normal to see
+`product-catalog`'s pods restart once or twice with a "Connection to postgres:5432
+refused" error in their first log lines before Postgres finishes starting; Kubernetes'
+own restart-with-backoff loop recovers automatically once Postgres becomes reachable, with
+no manual intervention needed.
+
+Once everything is `1/1 Running`, reach the app from your own terminal (there's no
+external exposure yet — that's Step 6's Ingress):
+
+```bash
+# <local-port>:<remote-port> — left of the colon is the port opened on YOUR machine
+# (what you curl against below); right of the colon is the Service's port, which it
+# routes on to the pod's container port. Both happen to be 8080 here, which is a
+# coincidence of this Service's config, not a rule — e.g. `9090:8080` would still work,
+# just reachable at localhost:9090 instead.
+kubectl port-forward -n ecommerce svc/product-catalog 8080:8080
+# in another shell:
+curl localhost:8080/api/products
+curl localhost:8080/actuator/health/readiness
+```
+
+Teardown: `kubectl delete namespace ecommerce` removes every object created above in one
+shot (the PVC's underlying volume is deleted too — `kind`'s default StorageClass reclaim
+policy is `Delete`, so this genuinely discards the data, unlike Compose's
+`docker compose down` without `-v`).
+
+See `k8s/*.yaml` for the fully-commented walkthrough of every manifest (Namespace,
+Secret/ConfigMap, PersistentVolumeClaim, Deployment, Service, and the three probe types —
+Step 3).
+
 ## Roadmap
 
 ### Phase 0 — Foundations
