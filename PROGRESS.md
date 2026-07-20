@@ -101,7 +101,7 @@ does not retain memory between sessions.
   becomes reachable. No manual intervention needed; self-heals within roughly a minute
   on this local cluster.
 
-## Status: Step 3 — Onto Kubernetes — build complete, quiz pending
+## Status: Step 3 — Onto Kubernetes — COMPLETE, committed
 
 **Step 0 complete (2026-07-07).** Toolchain installed and verified:
 
@@ -191,7 +191,7 @@ makes "container started" different from "ready for connections."
 
 Committed 2026-07-10 (7 commits, `0112953`..`223cca6`). Step 2 is fully done.
 
-**Step 3 build complete (2026-07-19), quiz pending.** Two decisions confirmed with the user
+**Step 3 build complete (2026-07-19), quiz passed, committed.** Two decisions confirmed with the user
 up front (also logged in the decisions log below): a *minimal* Actuator (health endpoint +
 Kubernetes `liveness`/`readiness` probe groups only, metrics/Prometheus deferred to Step 4)
 rather than deferring probes entirely; and Postgres as a Deployment+PVC in-cluster rather
@@ -243,18 +243,30 @@ since it's a real ordering gap this step's design doesn't paper over.
 `README.md` gained a "Run on Kubernetes (kind)" section (build, `kind load`,
 `kubectl apply -f k8s/`, port-forward, teardown) documenting this same flow.
 
-**Next action:** quiz pending on Step 3's concepts (Pod/ReplicaSet/Deployment, Service
-ClusterIP + DNS, ConfigMap vs Secret, the three probe types and their distinct failure
-semantics, why `db` sits in readiness but not liveness, PVC/PV/StorageClass +
-`Recreate`-vs-`RollingUpdate`, `kind load` + `imagePullPolicy`) before grouped commits are
-proposed.
+Quiz passed (2026-07-19) — user correctly explained: why `postgres`'s Deployment needs
+`strategy: Recreate` (a ReadWriteOnce PVC can only be mounted read-write by one Pod at a
+time; `RollingUpdate` would briefly try to run old and new Pods side by side and deadlock)
+and named the resulting cost (momentary unavailability during a Postgres update) as an
+acceptable trade; what concretely goes wrong if `db` were moved into the `liveness` group
+instead of `readiness` (the app Pod would be restarted on a DB blip, which does nothing to
+fix a database problem — wasted restart churn); the Deployment → ReplicaSet → Pod
+ownership chain and what each layer is individually responsible for; and why the
+first-apply "Connection to postgres:5432 refused" restarts happened and why nothing needed
+fixing (no Kubernetes equivalent of Compose's `depends_on: condition: service_healthy`;
+Kubernetes' own restart-with-backoff loop self-heals once Postgres becomes reachable).
+
+Committed 2026-07-19 (14 commits, `61305d2`..`32503a0`). Step 3 is fully done.
+
+**Next action:** ready to start **Step 4 — make it observable** (structured logging, the
+rest of Spring Boot Actuator, Prometheus + Grafana scraping the service with one
+dashboard) on explicit user confirmation. Nothing else pending.
 
 ## Roadmap checklist
 
 - [x] Step 0 — Environment & "see it work first"
 - [x] Step 1 — First Spring service (Product Catalog)
 - [x] Step 2 — Containerize it (Dockerfile + Compose)
-- [ ] Step 3 — Onto Kubernetes (hand-written manifests)
+- [x] Step 3 — Onto Kubernetes (hand-written manifests)
 - [ ] Step 4 — Make it observable (Actuator, Prometheus, Grafana)
 - [ ] Step 5 — Second service + database-per-service (Order)
 - [ ] Step 6 — Single entry point (gateway/ingress)
