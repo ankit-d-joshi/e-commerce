@@ -71,8 +71,37 @@ does not retain memory between sessions.
   placeholders in `application.yml`, so the same jar works unmodified both bare
   (`./mvnw spring-boot:run`, localhost fallback) and under Docker Compose (env vars
   injected, pointing at the `postgres` service name over Compose's internal DNS).
+- 2026-07-19 (Step 3) — **Minimal Actuator added now**, rather than deferring all of
+  Actuator to Step 4: only the `health` endpoint is exposed over HTTP, with the
+  Kubernetes `liveness`/`readiness` probe groups enabled (`management.endpoint.health
+  .probes.enabled: true`). The `db` health indicator is placed in the **readiness**
+  group only, deliberately excluded from **liveness** — a database outage should drop a
+  pod from its Service's endpoints (readiness), not get the pod killed and restarted
+  (liveness), since restarting the JVM does nothing to fix a database problem. Full
+  Actuator breadth (metrics, Prometheus scraping) stays deferred to Step 4 per YAGNI.
+- 2026-07-19 (Step 3) — **Postgres runs as a Deployment + PVC** in-cluster, not a
+  StatefulSet: simpler manifest surface for a single-instance dev database, at the cost
+  of the StatefulSet teaching moment (deferred until/unless a real multi-instance
+  stateful need arises). `product-catalog` itself is a Deployment with `replicas: 2`
+  (stateless, so trivially horizontal — the intended contrast with Postgres's
+  `replicas: 1`).
+- 2026-07-19 (Step 3) — **`k8s/` manifest filenames prefixed `kubernetes-`** (e.g.
+  `kubernetes-13-postgres-deployment.yaml`), at the user's request: their YAML editor
+  extension only enables Kubernetes schema checking/autocomplete for filenames
+  containing "kubernetes". A numeric segment follows the prefix to encode
+  `kubectl apply -f k8s/`'s alphabetical apply order (namespace → config/secret/storage
+  → postgres → product-catalog).
+- 2026-07-19 (Step 3) — Toolchain/behavior note (not a bug, left as-is): Kubernetes has
+  no equivalent of Compose's `depends_on: condition: service_healthy`. On first apply,
+  `postgres` and `product-catalog` Deployments start racing simultaneously, so
+  `product-catalog`'s pods hit "Connection to postgres:5432 refused" during Flyway's
+  startup connection attempt (fatal to `ApplicationContext` refresh, unlike a
+  *post-startup* DB blip, which the readiness/liveness split is designed to survive
+  without a restart) and are restarted by Kubernetes' own backoff loop until Postgres
+  becomes reachable. No manual intervention needed; self-heals within roughly a minute
+  on this local cluster.
 
-## Status: Step 2 — Containerize with Docker — COMPLETE, committed
+## Status: Step 3 — Onto Kubernetes — build complete, quiz pending
 
 **Step 0 complete (2026-07-07).** Toolchain installed and verified:
 
@@ -162,9 +191,63 @@ makes "container started" different from "ready for connections."
 
 Committed 2026-07-10 (7 commits, `0112953`..`223cca6`). Step 2 is fully done.
 
-**Next action:** ready to start **Step 3 — onto Kubernetes** (hand-written manifests:
-Deployment, Service, ConfigMap, Secret, readiness/liveness probes) on explicit user
-confirmation. Nothing else pending.
+**Step 3 build complete (2026-07-19), quiz pending.** Two decisions confirmed with the user
+up front (also logged in the decisions log below): a *minimal* Actuator (health endpoint +
+Kubernetes `liveness`/`readiness` probe groups only, metrics/Prometheus deferred to Step 4)
+rather than deferring probes entirely; and Postgres as a Deployment+PVC in-cluster rather
+than a StatefulSet, since the app itself is already a stateless Deployment.
+
+Application changes: `product-catalog/pom.xml` gained `spring-boot-starter-actuator`;
+`application.yml` gained a commented `management:` block exposing only `health`, with the
+`db` indicator placed in the **readiness** group but explicitly excluded from **liveness**
+— a database outage should drop the pod from the Service's endpoints, not get the pod
+killed and restarted. `mvn clean verify` re-run and confirmed all 12 tests still pass with
+Actuator added.
+
+New `k8s/` directory: 9 manifests, filenames prefixed `kubernetes-` (per user request, so
+their YAML extension's Kubernetes schema checking applies) and numbered for a safe
+`kubectl apply -f k8s/` order — Namespace → shared `db-credentials` Secret + `db-config`/
+`catalog-config` ConfigMaps → `postgres-pvc` (1Gi, `standard` StorageClass, dynamically
+provisioned) → `postgres` Deployment (`replicas: 1`, `strategy: Recreate` — required
+because a ReadWriteOnce PVC can't be mounted read-write by two pods at once, which
+RollingUpdate would briefly attempt — + `pg_isready` exec probes, mirroring the Compose
+healthcheck) → `postgres` Service (ClusterIP, name must be exactly `postgres` for JDBC URL
+DNS resolution to keep working unmodified) → `product-catalog` Deployment (`replicas: 2`,
+default RollingUpdate since it's stateless, `imagePullPolicy: IfNotPresent` since there's no
+registry — `kind load docker-image` puts the image directly on the node — plus a
+`startupProbe` gating `livenessProbe`/`readinessProbe`, the former pointed at
+`/actuator/health/liveness`, the latter at `/actuator/health/readiness`) → `product-catalog`
+Service (ClusterIP, port 8080).
+
+End-to-end verified against the running `ecommerce-dev` kind cluster: `kubectl apply
+--dry-run=client` validated all 9 manifests; image built and `kind load`ed; all pods reached
+`1/1 Running`; Flyway migrated both migrations on the successful catalog boot;
+`GET /api/products`, `/api/products/1`, and a correct 404 `ProblemDetail` for
+`/api/products/9999` all verified via `kubectl port-forward`; both `/actuator/health/{live
+ness,readiness}` returned `{"status":"UP"}`. Resilience checks: deleting a `product-catalog`
+pod kept the Service serving via the surviving replica and the ReplicaSet's replacement pod
+came up clean; deleting the `postgres` pod recreated it and the product data (verified by an
+identical `createdAt` timestamp) survived via the PVC, proving persistence.
+
+One real, instructive behavior was hit and is intentionally left as a teaching artifact
+rather than "fixed": Kubernetes has no equivalent of Compose's
+`depends_on: condition: service_healthy` — the `postgres` and `product-catalog` Deployments
+both started the instant they were applied, so on this first-ever apply the catalog pods hit
+"Connection to postgres:5432 refused" during Flyway's startup connection attempt (Flyway
+failing during `ApplicationContext` refresh is fatal to the app, unlike a database blip
+*after* the app is already up, which the liveness/readiness split above is designed to
+survive). Kubernetes' own restart-with-backoff loop recovered automatically once Postgres
+became reachable, with zero manual intervention — worth calling out explicitly in the quiz,
+since it's a real ordering gap this step's design doesn't paper over.
+
+`README.md` gained a "Run on Kubernetes (kind)" section (build, `kind load`,
+`kubectl apply -f k8s/`, port-forward, teardown) documenting this same flow.
+
+**Next action:** quiz pending on Step 3's concepts (Pod/ReplicaSet/Deployment, Service
+ClusterIP + DNS, ConfigMap vs Secret, the three probe types and their distinct failure
+semantics, why `db` sits in readiness but not liveness, PVC/PV/StorageClass +
+`Recreate`-vs-`RollingUpdate`, `kind load` + `imagePullPolicy`) before grouped commits are
+proposed.
 
 ## Roadmap checklist
 
